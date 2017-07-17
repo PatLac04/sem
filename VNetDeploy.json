@@ -1,0 +1,716 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "defaultValue": "PetalDRVNet",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "defaultValue": "172.16.0.0/20",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "subnetCIDR": {
+      "type": "string",
+      "defaultValue": "/24",
+      "metadata": {
+        "description": "Subnet CIDR"
+      }
+    }
+  },
+  "variables": {
+    "apiVersion": "2015-06-15",
+    "internalNetAddressPrefix": "10.0.0.0/23",
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1])]",
+    "subnets": {
+      "WebTier": {
+        "name": "WebTier",
+        "prefix": "[concat(variables('subnetPrefix'), '.1.0', parameters('subnetCIDR'))]"
+      },
+      "APIandQuery": {
+        "name": "APIandQuery",
+        "prefix": "[concat(variables('subnetPrefix'), '.2.0', parameters('subnetCIDR'))]"
+      },
+      "SolR": {
+        "name": "SolR",
+        "prefix": "[concat(variables('subnetPrefix'), '.3.0', parameters('subnetCIDR'))]"
+      },
+      "IngestionAPI": {
+        "name": "IngestionAPI",
+        "prefix": "[concat(variables('subnetPrefix'), '.4.0', parameters('subnetCIDR'))]"
+      },
+      "Ingestion": {
+        "name": "Ingestion",
+        "prefix": "[concat(variables('subnetPrefix'), '.5.0', parameters('subnetCIDR'))]"
+      },
+      "Postgres": {
+        "name": "Postgres",
+        "prefix": "[concat(variables('subnetPrefix'), '.6.0', parameters('subnetCIDR'))]"
+      },
+      "Mgmt": {
+        "name": "Mgmt",
+        "prefix": "[concat(variables('subnetPrefix'), '.10.0', parameters('subnetCIDR'))]"
+      },
+      "gateway": {
+        "name": "gatewaySubnet",
+        "prefix": "[concat(variables('subnetPrefix'), '.15.228', '/28')]"
+      }
+    },
+    "WebTier-NSGName": "[concat('NSG-', variables('subnets').WebTier.name)]",
+    "APIandQuery-NSGName": "[concat('NSG-', variables('subnets').APIandQuery.name)]",
+    "SolR-NSGName": "[concat('NSG-', variables('subnets').SolR.name)]",
+    "IngestionAPI-NSGName": "[concat('NSG-', variables('subnets').IngestionAPI.name)]",
+    "Ingestion-NSGName": "[concat('NSG-', variables('subnets').Ingestion.name)]",
+    "Postgres-NSGName": "[concat('NSG-', variables('subnets').Postgres.name)]",
+    "Mgmt-NSGName": "[concat('NSG-', variables('subnets').Mgmt.name)]"
+  },
+  "resources": [
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('WebTier-NSGName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH-FromMgmtSubnet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-Http",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound"
+            },
+            "comments": "Allow HTTP to [variables('subnets').WebTier.name]"
+          },
+          {
+            "name": "Allow-Https",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "443",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 120,
+              "direction": "Inbound"
+            },
+            "comments": "Allow HTTPS to [variables('subnets').WebTier.name]"
+          },
+          {
+            "name": "Deny-SSH-Internet",
+            "properties": {
+              "description": "Block SSH",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 500,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Deny-AllVNetIncoming",
+            "properties": {
+              "access": "Deny",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*",
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "sourcePortRange": "*"
+            },
+            "comments": "Deny all traffic from VNet except what we've explicitly allowed"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('APIandQuery-NSGName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH-FromMgmtSubnet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-443-FromMWebTier",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "443",
+              "destinationPortRange": "443",
+              "sourceAddressPrefix": "[variables('subnets').WebTier.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound"
+            },
+            "comments": "Enable HTTPS from [variables('subnets').WebTier.name]"
+          },
+          {
+            "name": "Allow-TCP-2551-to-2554-From-Ingestion",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "2551-2554",
+              "destinationPortRange": "2551-2554",
+              "sourceAddressPrefix": "[variables('subnets').Ingestion.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 120,
+              "direction": "Inbound"
+            },
+            "comments": "Enable TCP 2551 from [variables('subnets').Ingestion.name]"
+          },
+          {
+            "name": "Deny-SSH-Internet",
+            "properties": {
+              "description": "Block SSH",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 500,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Allow-Internal-Subnet-Traffic",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "[variables('subnets').APIandQuery.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 3000,
+              "direction": "Inbound"
+            },
+            "comments": "Enable subnet internal trafic"
+          },
+          {
+            "name": "Deny-AllVNetIncoming",
+            "properties": {
+              "access": "Deny",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*",
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "sourcePortRange": "*"
+            },
+            "comments": "Deny all traffic from VNet except what we've explicitly allowed"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('SolR-NSGName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH-FromMgmtSubnet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-Http-8080",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 120,
+              "direction": "Inbound"
+            },
+            "comments": "Allow HTTP 8080 from other subnets"
+          },
+          {
+            "name": "Deny-SSH-Internet",
+            "properties": {
+              "description": "Deny SSH",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 500,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Allow-Internal-Subnet-Traffic",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "[variables('subnets').SolR.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 3000,
+              "direction": "Inbound"
+            },
+            "comments": "Enable subnet internal trafic"
+          },
+          {
+            "name": "Deny-AllVNetIncoming",
+            "properties": {
+              "access": "Deny",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*",
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "sourcePortRange": "*"
+            },
+            "comments": "Deny all traffic from VNet except what we've explicitly allowed"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('IngestionAPI-NSGName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH-FromMgmtSubnet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-http-8082",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "8082",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound"
+            },
+            "comments": "Allow http 8082 traffic from vNet"
+          },
+          {
+            "name": "Deny-SSH-Internet",
+            "properties": {
+              "description": "Deny SSH",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 500,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Deny-AllVNetIncoming",
+            "properties": {
+              "access": "Deny",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*",
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "sourcePortRange": "*"
+            },
+            "comments": "Deny all traffic from VNet except what we've explicitly allowed"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('Ingestion-NSGName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH-FromMgmtSubnet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-TCP-2551-to-2554-From-APIandQuery",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "2551-2554",
+              "destinationPortRange": "2551-2554",
+              "sourceAddressPrefix": "[variables('subnets').APIandQuery.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 120,
+              "direction": "Inbound"
+            },
+            "comments": "Enable TCP 2551-2554 from [variables('subnets').APIandQuery.name]"
+          },
+          {
+            "name": "Deny-SSH-Internet",
+            "properties": {
+              "description": "Deny SSH",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 500,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Deny-AllVNetIncoming",
+            "properties": {
+              "access": "Deny",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*",
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "sourcePortRange": "*"
+            },
+            "comments": "Deny all traffic from VNet except what we've explicitly allowed"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('Postgres-NSGName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH-FromMgmtSubnet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-Http-8080",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 120,
+              "direction": "Inbound"
+            },
+            "comments": "Allow HTTP 8080 from other subnets"
+          },
+          {
+            "name": "Deny-SSH-Internet",
+            "properties": {
+              "description": "Deny SSH",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 500,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "Allow-Internal-Subnet-Traffic",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "[variables('subnets').Postgres.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 3000,
+              "direction": "Inbound"
+            },
+            "comments": "Enable subnet internal trafic"
+          },
+          {
+            "name": "Deny-AllVNetIncoming",
+            "properties": {
+              "access": "Deny",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*",
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "sourcePortRange": "*"
+            },
+            "comments": "Deny all traffic from VNet except what we've explicitly allowed"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('Mgmt-NSGName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "Allow-SSH-FromMgmtSubnet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from [variables('subnets').Mgmt.name] to VMs in management subnet"
+          },
+          {
+            "name": "Allow-SSH-FromInternalNet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "[variables('internalNetAddressPrefix')]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from Internal Network to [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-SSH-FromInternet",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 120,
+              "direction": "Inbound"
+            },
+            "comments": "Enable SSH from Internet to [variables('subnets').Mgmt.name]"
+          },
+          {
+            "name": "Allow-Subnet-Traffic",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 3000,
+              "direction": "Inbound"
+            },
+            "comments": "Enable all subnet internal trafic"
+          },
+          {
+            "name": "Deny-AllVNetIncoming",
+            "properties": {
+              "access": "Deny",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*",
+              "direction": "Inbound",
+              "priority": 4000,
+              "protocol": "*",
+              "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
+              "sourcePortRange": "*"
+            },
+            "comments": "Deny all traffic from VNet except what we've explicitly allowed"
+          }
+        ]
+      }
+    },
+
+    {
+      "apiVersion": "[variables('apiVersion')]",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[parameters('vnetName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[parameters('vnetAddressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnets').WebTier.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').WebTier.prefix]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('WebTier-NSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('subnets').APIandQuery.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').APIandQuery.prefix]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('APIandQuery-NSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('subnets').SolR.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').SolR.prefix]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('SolR-NSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('subnets').IngestionAPI.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').IngestionAPI.prefix]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('IngestionAPI-NSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('subnets').Ingestion.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').Ingestion.prefix]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('Ingestion-NSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('subnets').Postgres.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').Postgres.prefix]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('Postgres-NSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('subnets').Mgmt.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').Mgmt.prefix]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('Mgmt-NSGName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('subnets').gateway.name]",
+            "properties": {
+              "addressPrefix": "[variables('subnets').gateway.prefix]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('WebTier-NSGName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('APIandQuery-NSGName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('SolR-NSGName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('IngestionAPI-NSGName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('Ingestion-NSGName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('Postgres-NSGName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('Mgmt-NSGName'))]"
+      ]
+    }
+  ]
+}

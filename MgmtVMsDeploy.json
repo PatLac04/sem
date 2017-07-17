@@ -1,0 +1,332 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "defaultValue": "PL-VNet",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "mgmtSubnetName": {
+      "type": "string",
+      "defaultValue": "managementSubnet",
+      "metadata": {
+        "description": "Management Subnet name"
+      }
+    },
+    "adminUserName": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin User name for the Virtual Machine."
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH rsa public key file as a string."
+      }
+    }
+  },
+  "variables": {
+    "api-version": "2015-06-15",
+    "vnetId": "[resourceId(resourceGroup().name,'Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "mgmtSubnetRef": "[concat(variables('vnetId'), '/subnets/', parameters('mgmtSubnetName'))]",
+    "diagnosticsStorageAccountName": "[concat('mgmtvmdiag', uniqueString(subscription().subscriptionId, resourceGroup().id))]",
+    "adminUserName": "adminuser",
+    "vmPrefix": "vm-",
+    "pipPrefix": "pip-",
+    "nicPrefix": "nic-",
+    "osDiskNamePrefix": "osdisk-",
+    "availSetPrefix": "availset-",
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1], '.10')]",
+    "osFamily": {
+        "imagePublisher": "OpenLogic",
+        "offer": "CentOS",
+        "imageSKU": "7.3",
+        "version": "latest"
+    },
+    "mgmtVMs": {
+        "jumpbox": {
+            "vmName": "[concat(variables('vmPrefix'), 'jumpbox')]",
+            "vmSize": "Standard_DS1_v2",
+            "vmPip": "[concat(variables('pipPrefix'), 'jumpbox')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'jumpbox')]",
+            "osDiskName": "[concat(variables('osDiskNamePrefix'), 'jumpbox')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'jumpbox')]",
+            "staticIP": "[concat(variables('subnetPrefix'), '.10')]"
+        },
+        "monitoring": {
+            "vmName": "[concat(variables('vmPrefix'), 'monitor')]",
+            "vmSize": "Standard_DS1_v2",
+            "vmPip": "[concat(variables('pipPrefix'), 'monitor')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'monitor')]",
+            "osDiskName": "[concat(variables('osDiskNamePrefix'), 'monitor')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'monitor')]",
+            "staticIP": "[concat(variables('subnetPrefix'), '.11')]"
+       }
+    }
+  },
+  "resources": [
+    {
+        "name": "[variables('diagnosticsStorageAccountName')]",
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2016-01-01",
+        "location": "[resourceGroup().location]",
+        "sku": {
+            "name": "Standard_LRS",
+            "tier": "Standard"
+        },
+        "kind": "Storage",
+        "tags": {},
+        "properties": {},
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+        "name": "[variables('mgmtVMs').jumpbox.vmPip]",
+        "type": "Microsoft.Network/publicIPAddresses",
+        "apiVersion": "2016-09-01",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "publicIPAllocationMethod": "Static"
+        },
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+      "name": "[variables('mgmtVMs').monitoring.vmPip]",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2016-09-01",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      },
+      "resources": [],
+      "dependsOn": []
+    },
+    {
+        "name": "[variables('mgmtVMs').jumpbox.vmNic]",
+        "type": "Microsoft.Network/networkInterfaces",
+        "apiVersion": "2016-09-01",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Network/publicIpAddresses/', variables('mgmtVMs').jumpbox.vmPip)]"
+        ],
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "subnet": {
+                            "id": "[variables('mgmtSubnetRef')]"
+                        },
+                        "privateIPAllocationMethod": "Static",
+                        "privateIPAddress": "[variables('mgmtVMs').jumpbox.staticIP]",
+                        "publicIpAddress": {
+                            "id": "[resourceId(resourceGroup().name,'Microsoft.Network/publicIpAddresses', variables('mgmtVMs').jumpbox.vmPip)]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[variables('mgmtVMs').jumpbox.vmName]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+
+    {
+        "name": "[variables('mgmtVMs').jumpbox.vmName]",
+        "type": "Microsoft.Compute/virtualMachines",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Network/networkInterfaces/', variables('mgmtVMs').jumpbox.vmNic)]",
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]"
+        ],
+        "properties": {
+           "osProfile": {
+                "computerName": "[variables('mgmtVMs').jumpbox.vmName]",
+                "adminUsername": "[parameters('adminUsername')]",
+                "linuxConfiguration": {
+                    "disablePasswordAuthentication": true,
+                    "ssh": {
+                        "publicKeys": [
+                            {
+                                "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                                "keyData": "[parameters('sshKeyData')]"
+                            }
+                        ]
+                    }
+                }
+            },
+            "hardwareProfile": {
+                "vmSize": "[variables('mgmtVMs').jumpbox.vmSize]"
+            },
+            "storageProfile": {
+                "imageReference": {
+                    "publisher": "[variables('osFamily').imagePublisher]",
+                    "offer": "[variables('osFamily').offer]",
+                    "sku": "[variables('osFamily').imageSKU]",
+                    "version": "[variables('osFamily').version]"
+                },
+                "osDisk": {
+                    "name": "[variables('mgmtVMs').jumpbox.osDiskName]",
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                        "storageAccountType": "Standard_LRS"
+                    },
+                    "diskSizeGB": 64
+                },
+                "dataDisks": []
+            },
+            "networkProfile": {
+                "networkInterfaces": [
+                    {
+                        "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('mgmtVMs').jumpbox.vmNic)]"
+                    }
+                ]
+            },
+            "diagnosticsProfile": {
+                "bootDiagnostics": {
+                    "enabled": true,
+                    "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+                }
+            }
+        }
+    },
+    {
+      "apiVersion": "[variables('api-version')]",
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(variables('mgmtVMs').jumpbox.vmName,'/enablevmaccess')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Compute/virtualMachines/', variables('mgmtVMs').jumpbox.vmName)]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "name": "[variables('mgmtVMs').monitoring.vmNic]",
+        "type": "Microsoft.Network/networkInterfaces",
+        "apiVersion": "2016-09-01",
+        "location": "[resourceGroup().location]",
+        "dependsOn": ["[resourceId('Microsoft.Network/publicIpAddresses/', variables('mgmtVMs').monitoring.vmPip)]"],
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "subnet": {
+                            "id": "[variables('mgmtSubnetRef')]"
+                        },
+                        "privateIPAllocationMethod": "Static",
+                        "privateIPAddress": "[variables('mgmtVMs').monitoring.staticIP]",
+                        "publicIpAddress": {
+                          "id": "[resourceId(resourceGroup().name,'Microsoft.Network/publicIpAddresses', variables('mgmtVMs').monitoring.vmPip)]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[variables('mgmtVMs').monitoring.vmName]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "name": "[variables('mgmtVMs').monitoring.vmName]",
+        "type": "Microsoft.Compute/virtualMachines",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Network/networkInterfaces/', variables('mgmtVMs').monitoring.vmNic)]",
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]"
+        ],
+        "properties": {
+            "osProfile": {
+                "computerName": "[variables('mgmtVMs').monitoring.vmName]",
+                "adminUsername": "[parameters('adminUsername')]",
+                "linuxConfiguration": {
+                    "disablePasswordAuthentication": true,
+                    "ssh": {
+                        "publicKeys": [
+                            {
+                                "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                                "keyData": "[parameters('sshKeyData')]"
+                            }
+                        ]
+                    }
+                }
+            },
+            "hardwareProfile": {
+                "vmSize": "[variables('mgmtVMs').monitoring.vmSize]"
+            },
+            "storageProfile": {
+                "imageReference": {
+                    "publisher": "[variables('osFamily').imagePublisher]",
+                    "offer": "[variables('osFamily').offer]",
+                    "sku": "[variables('osFamily').imageSKU]",
+                    "version": "[variables('osFamily').version]"
+                },
+                "osDisk": {
+                    "name": "[variables('mgmtVMs').monitoring.osDiskName]",
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                        "storageAccountType": "Standard_LRS"
+                    },
+                    "diskSizeGB": 64
+                },
+                "dataDisks": []
+            },
+            "networkProfile": {
+                "networkInterfaces": [
+                    {
+                        "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('mgmtVMs').monitoring.vmNic)]"
+                    }
+                ]
+            },
+            "diagnosticsProfile": {
+                "bootDiagnostics": {
+                    "enabled": true,
+                    "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+                }
+            }
+        }
+    },
+    {
+      "apiVersion": "[variables('api-version')]",
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(variables('mgmtVMs').monitoring.vmName,'/enablevmaccess')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Compute/virtualMachines/', variables('mgmtVMs').monitoring.vmName)]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    }
+  ]
+}
