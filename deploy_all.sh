@@ -21,6 +21,6 @@ az group deployment create --name DeployVNet --resource-group $resourceGroupName
 az group deployment create --name DeployMgmtVMs --resource-group $resourceGroupName --template-file MgmtVMsDeploy.json --parameters @MgmtVMsDeploy.parameters.json --verbose
 
 # Validate & Deploy Web VMs
-# az group deployment validate --resource-group $resourceGroupName --template-file WebDeploy.json --parameters @WebDeploy.parameters.json --verbose
+az group deployment validate --resource-group $resourceGroupName --template-file WebDeploy.json --parameters @WebDeploy.parameters.json --verbose
 az group deployment create --name DeployWebVMs --resource-group $resourceGroupName --template-file WebDeploy.json --parameters @WebDeploy.parameters.json --verbose
 

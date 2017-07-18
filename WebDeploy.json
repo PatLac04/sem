@@ -1,0 +1,403 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "webSubnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Web Subnet name"
+      }
+    },
+    "numberOfNodesInsight": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Number of web nodes to create for Insight"
+      }
+    },
+    "numberOfNodesDigiseer": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Number of web nodes to create for Digiseer"
+      }
+    },
+    "adminUserName": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin User name for the Virtual Machine."
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH rsa public key file as a string."
+      }
+    }
+  },
+  "variables": {
+    "api-version": "2015-06-15",
+    "vnetId": "[resourceId(resourceGroup().name,'Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "subnetRef": "[concat(variables('vnetId'), '/subnets/', parameters('webSubnetName'))]",
+    "diagnosticsStorageAccountName": "[concat('webvmdiag', uniqueString(subscription().subscriptionId, resourceGroup().id))]",
+
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1], '.1.')]",
+
+    "vmPrefix": "vm-",
+    "pipPrefix": "pip-",
+    "nicPrefix": "nic-",
+    "osDiskPrefix": "osdisk-",
+    "dataDiskPrefix": "datadisk-",
+    "availSetPrefix": "availset-",
+    "loadBalancerPrefix": "loadbalancer-",
+    "nicLoopPrefix": "nicLoop-",
+    "natLoopPrefix": "natLoop-",
+    "extLoopPrefix": "extLoop-",
+    "dataDiskLoopPrefix": "diskLoop-",
+
+    "webTierVMs": {
+        "insight": {
+            "vmName": "[concat(variables('vmPrefix'), 'insight')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'insight')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'insight')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'insight')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'insight')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'insight')]",
+            "numberOfNodes": 2,
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'insight')]",
+            "lbNatLoop": "[concat(variables('natLoopPrefix'), 'insight')]",
+            "dnsNameforLBIP": "patlac1",
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'insight')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'insight')]"
+        },
+        "digiseer": {
+            "vmName": "[concat(variables('vmPrefix'), 'digiseer')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'digiseer')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'digiseer')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'digiseer')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'digiseer')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'digiseer')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'digiseer')]",
+            "dnsNameforLBIP": "patlac2",
+            "numberOfNodes": 2,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'digiseer')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'digiseer')]"
+        }
+    },
+    "insightLoadBalancerID": "[resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName)]",
+    "digiseerLoadBalancerID": "[resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName)]",
+
+    "osFamily": {
+        "imagePublisher": "OpenLogic",
+        "offer": "CentOS",
+        "imageSKU": "7.3",
+        "version": "latest"
+    }
+  },
+  "resources": [
+    {
+        "name": "[variables('diagnosticsStorageAccountName')]",
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2016-01-01",
+        "location": "[resourceGroup().location]",
+        "sku": {
+            "name": "Standard_LRS",
+            "tier": "Standard"
+        },
+        "kind": "Storage",
+        "tags": {},
+        "properties": {},
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+        "comments": "Public IP for Insight WebTier LoadBalancer",
+        "type": "Microsoft.Network/publicIPAddresses",
+        "apiVersion": "2015-05-01-preview",
+        "name": "[variables('webTierVMs').insight.vmPip]",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "publicIPAllocationMethod": "Dynamic",
+            "dnsSettings": {
+                "domainNameLabel": "[variables('webTierVMs').insight.dnsNameforLBIP]"
+            }
+        }
+    },
+    {
+        "comments": "Availability Set for Insight WebTier VMs",
+        "name": "[variables('webTierVMs').insight.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Load Balancer for Insight WebTier",
+        "type": "Microsoft.Network/loadBalancers",
+        "name": "[variables('webTierVMs').insight.loadBalancerName]",
+        "apiVersion": "2017-03-01",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Network/publicIPAddresses/', variables('webTierVMs').insight.vmPip)]"
+        ],
+        "properties": {
+            "frontendIPConfigurations": [
+                {
+                    "name": "LoadBalancerFrontEnd",
+                    "properties": {
+                        "publicIPAddress": {
+                            "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('webTierVMs').insight.vmPip)]"
+                        }
+                    }
+                }
+            ],
+            "backendAddressPools": [
+                {
+                    "name": "loadBalancerBackEnd"
+                }
+            ],
+            "loadBalancingRules": [
+                {
+                    "name": "LBHttpRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 80,
+                        "backendPort": 80,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                },
+                {
+                    "name": "LBHttpsRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 443,
+                        "backendPort": 443,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                }
+            ],
+            "probes": [
+                {
+                    "name": "lbprobe",
+                    "properties": {
+                        "protocol": "Tcp",
+                        "port": 80,
+                        "intervalInSeconds": 5,
+                        "numberOfProbes": 2
+                    }
+                }
+            ],
+            "inboundNatRules": [],
+            "outboundNatRules": [],
+            "inboundNatPools": []
+        }
+    },
+    {
+        "apiVersion": "2015-06-15",
+        "type": "Microsoft.Network/loadBalancers/inboundNatRules",
+        "name": "[concat(variables('webTierVMs').insight.loadBalancerName, '/', variables('webTierVMs').insight.vmName, copyindex())]",
+        "location": "[resourceGroup().location]",
+        "copy": {
+            "name": "[variables('webTierVMs').insight.lbNatLoop]",
+            "count": "[variables('webTierVMs').insight.numberOfNodes]"
+        },
+        "dependsOn": [
+            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').insight.loadBalancerName)]"
+        ],
+        "properties": {
+            "frontendIPConfiguration": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+            },
+            "protocol": "tcp",
+            "frontendPort": "[copyIndex(5000)]",
+            "backendPort": 22,
+            "enableFloatingIP": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Insight WebTier VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('webTierVMs').insight.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('webTierVMs').insight.nicLoop]",
+            "count": "[variables('webTierVMs').insight.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').insight.loadBalancerName)]",
+            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').insight.loadBalancerName, '/inboundNatRules/', variables('webTierVMs').insight.vmName, copyindex())]"
+        ],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                        {
+                            "id": "[concat(variables('insightLoadBalancerID'), '/backendAddressPools/loadBalancerBackEnd')]"
+                        }
+                        ],
+                        "loadBalancerInboundNatRules": [
+                            {
+                            "id": "[concat(variables('insightLoadBalancerID'), '/inboundNatRules/', variables('webTierVMs').insight.vmName, copyindex())]"
+                            }
+                        ]
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('webTierVMs').insight.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('webTierVMs').insight.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('webTierVMs').insight.nicLoop]",
+            "count": "[variables('webTierVMs').insight.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('webTierVMs').insight.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('webTierVMs').insight.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('webTierVMs').insight.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('webTierVMs').insight.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('webTierVMs').insight.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('webTierVMs').insight.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 2,
+              "input": {
+                  "diskSizeGB": "128",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('webTierVMs').insight.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('webTierVMs').insight.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('webTierVMs').insight.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('webTierVMs').insight.extLoop]",
+            "count": "[variables('webTierVMs').insight.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('webTierVMs').insight.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    }
+  ]
+}

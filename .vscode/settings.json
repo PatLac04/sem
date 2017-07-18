@@ -1,0 +1,11 @@
+// Place your settings in this file to overwrite the default settings
+{
+"editor.renderIndentGuides": true,
+"window.zoomLevel": 0,
+"editor.renderWhitespace": "all",
+
+// The number of spaces a tab is equal to. This setting is overriden based on the file contents when `editor.detectIndentation` is on.
+  "editor.tabSize": 4,
+  "editor.insertSpaces": true,
+  "git.enableSmartCommit": true
+} 
