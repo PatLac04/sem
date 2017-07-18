@@ -1,0 +1,872 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "webSubnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Web Subnet name"
+      }
+    },
+    "numberOfNodesApi": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Number of nodes to create for API"
+      }
+    },
+    "numberOfNodesLargeQuery": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Number of nodes to create for the Large Query servers"
+      }
+    },
+    "adminUserName": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin User name for the Virtual Machine."
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH rsa public key file as a string."
+      }
+    }
+  },
+  "variables": {
+    "api-version": "2015-06-15",
+    "vnetId": "[resourceId(resourceGroup().name,'Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "subnetRef": "[concat(variables('vnetId'), '/subnets/', parameters('webSubnetName'))]",
+    "diagnosticsStorageAccountName": "[concat('apiquery', uniqueString(subscription().subscriptionId, resourceGroup().id))]",
+
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1], '.2.')]",
+
+    "vmPrefix": "vm-",
+    "pipPrefix": "pip-",
+    "nicPrefix": "nic-",
+    "osDiskPrefix": "osdisk-",
+    "dataDiskPrefix": "datadisk-",
+    "availSetPrefix": "availset-",
+    "loadBalancerPrefix": "loadbalancer-",
+    "nicLoopPrefix": "nicLoop-",
+    "natLoopPrefix": "natLoop-",
+    "extLoopPrefix": "extLoop-",
+
+    "apiAndQueryVMs": {
+        "api": {
+            "vmName": "[concat(variables('vmPrefix'), 'api')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'api')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'api')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'api')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'api')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'api')]",
+            "numberOfNodes": 2,
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'api')]",
+            "loadBalancerPrivateIP": "172.16.2.250",
+            "lbNatLoop": "[concat(variables('natLoopPrefix'), 'api')]",
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'api')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'api')]"
+        },
+        "queryLarge": {
+            "vmName": "[concat(variables('vmPrefix'), 'queryLarge')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'queryLarge')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'queryLarge')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'queryLarge')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'queryLarge')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'queryLarge')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'queryLarge')]",
+            "numberOfNodes": 2,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'queryLarge')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'queryLarge')]"
+        },
+        "querySmall": {
+            "vmName": "[concat(variables('vmPrefix'), 'querySmall')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'querySmall')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'querySmall')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'querySmall')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'querySmall')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'querySmall')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'querySmall')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'querySmall')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'querySmall')]"
+        },
+        "channel": {
+            "vmName": "[concat(variables('vmPrefix'), 'channel')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'channel')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'channel')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'channel')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'channel')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'channel')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'channel')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'channel')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'channel')]"
+        },
+        "router": {
+            "vmName": "[concat(variables('vmPrefix'), 'router')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'router')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'router')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'router')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'router')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'router')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'router')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'router')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'router')]"
+        }
+    },
+    "apiLoadBalancerID": "[resourceId('Microsoft.Network/loadBalancers', variables('apiAndQueryVMs').api.loadBalancerName)]",
+
+    "osFamily": {
+        "imagePublisher": "OpenLogic",
+        "offer": "CentOS",
+        "imageSKU": "7.3",
+        "version": "latest"
+    }
+  },
+  "resources": [
+    {
+        "name": "[variables('diagnosticsStorageAccountName')]",
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2016-01-01",
+        "location": "[resourceGroup().location]",
+        "sku": {
+            "name": "Standard_LRS",
+            "tier": "Standard"
+        },
+        "kind": "Storage",
+        "tags": {},
+        "properties": {},
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+        "comments": "Availability Set for api VMs",
+        "name": "[variables('apiAndQueryVMs').api.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Availability Set for large query VMs",
+        "name": "[variables('apiAndQueryVMs').queryLarge.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Load Balancer for api VMs",
+        "type": "Microsoft.Network/loadBalancers",
+        "name": "[variables('apiAndQueryVMs').api.loadBalancerName]",
+        "apiVersion": "2017-03-01",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "properties": {
+            "frontendIPConfigurations": [
+                {
+                    "name": "LoadBalancerFrontEnd",
+                    "properties": {
+                        "privateIPAllocationMethod": "Static",
+                        "privateIPAddress": "[variables('apiAndQueryVMs').api.loadBalancerPrivateIP]",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "backendAddressPools": [
+                {
+                    "name": "loadBalancerBackEnd"
+                }
+            ],
+            "loadBalancingRules": [
+                {
+                    "name": "LBHttpRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('apiAndQueryVMs').api.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 80,
+                        "backendPort": 80,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('apiAndQueryVMs').api.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('apiAndQueryVMs').api.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                },
+                {
+                    "name": "LBHttpsRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('apiAndQueryVMs').api.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 443,
+                        "backendPort": 443,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('apiAndQueryVMs').api.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('apiAndQueryVMs').api.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                }
+            ],
+            "probes": [
+                {
+                    "name": "lbprobe",
+                    "properties": {
+                        "protocol": "Tcp",
+                        "port": 80,
+                        "intervalInSeconds": 5,
+                        "numberOfProbes": 2
+                    }
+                }
+            ],
+            "inboundNatRules": [],
+            "outboundNatRules": [],
+            "inboundNatPools": []
+        }
+    },
+    {
+        "comments": "Network Interfaces for api VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('apiAndQueryVMs').api.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').api.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').api.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Network/loadBalancers/', variables('apiAndQueryVMs').api.loadBalancerName)]"
+        ],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                        {
+                            "id": "[concat(variables('apiLoadBalancerID'), '/backendAddressPools/loadBalancerBackEnd')]"
+                        }
+                        ]
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('apiAndQueryVMs').api.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Large Query VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('apiAndQueryVMs').queryLarge.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').queryLarge.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').queryLarge.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('apiAndQueryVMs').queryLarge.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Small Query VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('apiAndQueryVMs').querySmall.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').querySmall.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').querySmall.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('apiAndQueryVMs').querySmall.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Channel VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('apiAndQueryVMs').channel.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').channel.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').channel.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('apiAndQueryVMs').channel.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Router VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('apiAndQueryVMs').router.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').router.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').router.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('apiAndQueryVMs').router.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "api VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('apiAndQueryVMs').api.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').api.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').api.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('apiAndQueryVMs').api.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('apiAndQueryVMs').api.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('apiAndQueryVMs').api.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('apiAndQueryVMs').api.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('apiAndQueryVMs').api.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('apiAndQueryVMs').api.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('apiAndQueryVMs').api.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "api VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('apiAndQueryVMs').api.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').api.extLoop]",
+            "count": "[variables('apiAndQueryVMs').api.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('apiAndQueryVMs').api.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Large Query VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('apiAndQueryVMs').queryLarge.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').queryLarge.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').queryLarge.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('apiAndQueryVMs').queryLarge.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('apiAndQueryVMs').queryLarge.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('apiAndQueryVMs').queryLarge.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('apiAndQueryVMs').queryLarge.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('apiAndQueryVMs').queryLarge.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('apiAndQueryVMs').queryLarge.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('apiAndQueryVMs').queryLarge.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Large Query VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('apiAndQueryVMs').queryLarge.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').queryLarge.extLoop]",
+            "count": "[variables('apiAndQueryVMs').queryLarge.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('apiAndQueryVMs').queryLarge.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Small Query VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('apiAndQueryVMs').querySmall.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').querySmall.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').querySmall.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('apiAndQueryVMs').querySmall.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('apiAndQueryVMs').querySmall.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('apiAndQueryVMs').querySmall.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('apiAndQueryVMs').querySmall.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('apiAndQueryVMs').querySmall.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Small Query VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('apiAndQueryVMs').querySmall.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').querySmall.extLoop]",
+            "count": "[variables('apiAndQueryVMs').querySmall.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('apiAndQueryVMs').querySmall.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Channel VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('apiAndQueryVMs').channel.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').channel.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').channel.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('apiAndQueryVMs').channel.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('apiAndQueryVMs').channel.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('apiAndQueryVMs').channel.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('apiAndQueryVMs').channel.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('apiAndQueryVMs').channel.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Channel VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('apiAndQueryVMs').channel.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').channel.extLoop]",
+            "count": "[variables('apiAndQueryVMs').channel.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('apiAndQueryVMs').channel.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Router VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('apiAndQueryVMs').router.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').router.nicLoop]",
+            "count": "[variables('apiAndQueryVMs').router.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('apiAndQueryVMs').router.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('apiAndQueryVMs').router.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('apiAndQueryVMs').router.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('apiAndQueryVMs').router.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('apiAndQueryVMs').router.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Router VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('apiAndQueryVMs').router.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('apiAndQueryVMs').router.extLoop]",
+            "count": "[variables('apiAndQueryVMs').router.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('apiAndQueryVMs').router.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    }
+  ]
+}

@@ -66,7 +66,6 @@
     "nicLoopPrefix": "nicLoop-",
     "natLoopPrefix": "natLoop-",
     "extLoopPrefix": "extLoop-",
-    "dataDiskLoopPrefix": "diskLoop-",
 
     "webTierVMs": {
         "insight": {
@@ -100,7 +99,7 @@
         }
     },
     "insightLoadBalancerID": "[resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName)]",
-    "digiseerLoadBalancerID": "[resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName)]",
+    "digiseerLoadBalancerID": "[resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').digiseer.loadBalancerName)]",
 
     "osFamily": {
         "imagePublisher": "OpenLogic",
@@ -139,8 +138,33 @@
         }
     },
     {
+        "comments": "Public IP for Digiseer WebTier LoadBalancer",
+        "type": "Microsoft.Network/publicIPAddresses",
+        "apiVersion": "2015-05-01-preview",
+        "name": "[variables('webTierVMs').digiseer.vmPip]",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "publicIPAllocationMethod": "Dynamic",
+            "dnsSettings": {
+                "domainNameLabel": "[variables('webTierVMs').digiseer.dnsNameforLBIP]"
+            }
+        }
+    },
+    {
         "comments": "Availability Set for Insight WebTier VMs",
         "name": "[variables('webTierVMs').insight.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Availability Set for Digiseer WebTier VMs",
+        "name": "[variables('webTierVMs').digiseer.availSetName]",
         "type": "Microsoft.Compute/availabilitySets",
         "apiVersion": "2016-04-30-preview",
         "location": "[resourceGroup().location]",
@@ -234,25 +258,86 @@
         }
     },
     {
-        "apiVersion": "2015-06-15",
-        "type": "Microsoft.Network/loadBalancers/inboundNatRules",
-        "name": "[concat(variables('webTierVMs').insight.loadBalancerName, '/', variables('webTierVMs').insight.vmName, copyindex())]",
+        "comments": "Load Balancer for Digiseer WebTier",
+        "type": "Microsoft.Network/loadBalancers",
+        "name": "[variables('webTierVMs').digiseer.loadBalancerName]",
+        "apiVersion": "2017-03-01",
         "location": "[resourceGroup().location]",
-        "copy": {
-            "name": "[variables('webTierVMs').insight.lbNatLoop]",
-            "count": "[variables('webTierVMs').insight.numberOfNodes]"
-        },
         "dependsOn": [
-            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').insight.loadBalancerName)]"
+            "[concat('Microsoft.Network/publicIPAddresses/', variables('webTierVMs').digiseer.vmPip)]"
         ],
         "properties": {
-            "frontendIPConfiguration": {
-                "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').insight.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
-            },
-            "protocol": "tcp",
-            "frontendPort": "[copyIndex(5000)]",
-            "backendPort": 22,
-            "enableFloatingIP": false
+            "frontendIPConfigurations": [
+                {
+                    "name": "LoadBalancerFrontEnd",
+                    "properties": {
+                        "publicIPAddress": {
+                            "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('webTierVMs').digiseer.vmPip)]"
+                        }
+                    }
+                }
+            ],
+            "backendAddressPools": [
+                {
+                    "name": "loadBalancerBackEnd"
+                }
+            ],
+            "loadBalancingRules": [
+                {
+                    "name": "LBHttpRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').digiseer.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 80,
+                        "backendPort": 80,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').digiseer.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').digiseer.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                },
+                {
+                    "name": "LBHttpsRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').digiseer.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 443,
+                        "backendPort": 443,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').digiseer.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('webTierVMs').digiseer.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                }
+            ],
+            "probes": [
+                {
+                    "name": "lbprobe",
+                    "properties": {
+                        "protocol": "Tcp",
+                        "port": 80,
+                        "intervalInSeconds": 5,
+                        "numberOfProbes": 2
+                    }
+                }
+            ],
+            "inboundNatRules": [],
+            "outboundNatRules": [],
+            "inboundNatPools": []
         }
     },
     {
@@ -265,8 +350,7 @@
         },
         "location": "[resourceGroup().location]",
         "dependsOn": [
-            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').insight.loadBalancerName)]",
-            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').insight.loadBalancerName, '/inboundNatRules/', variables('webTierVMs').insight.vmName, copyindex())]"
+            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').insight.loadBalancerName)]"
         ],
         "apiVersion": "2016-09-01",
         "properties": {
@@ -282,11 +366,6 @@
                         {
                             "id": "[concat(variables('insightLoadBalancerID'), '/backendAddressPools/loadBalancerBackEnd')]"
                         }
-                        ],
-                        "loadBalancerInboundNatRules": [
-                            {
-                            "id": "[concat(variables('insightLoadBalancerID'), '/inboundNatRules/', variables('webTierVMs').insight.vmName, copyindex())]"
-                            }
                         ]
                     }
                 }
@@ -299,6 +378,44 @@
         }
     },
     {
+        "comments": "Network Interfaces for Digiseer WebTier VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('webTierVMs').digiseer.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('webTierVMs').digiseer.nicLoop]",
+            "count": "[variables('webTierVMs').digiseer.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Network/loadBalancers/', variables('webTierVMs').digiseer.loadBalancerName)]"
+        ],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                        {
+                            "id": "[concat(variables('digiseerLoadBalancerID'), '/backendAddressPools/loadBalancerBackEnd')]"
+                        }
+                        ]
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('webTierVMs').digiseer.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Insight WebTier VMs",
         "type": "Microsoft.Compute/virtualMachines",
         "name": "[concat(variables('webTierVMs').insight.vmName, copyindex())]",
         "copy": {
@@ -379,6 +496,7 @@
       }
     },
     {
+        "comments": "Insight WebTier VM extensions",
         "type": "Microsoft.Compute/virtualMachines/extensions",
         "apiVersion": "[variables('api-version')]",
         "name": "[concat(variables('webTierVMs').insight.vmName, copyindex(), '/enablevmaccess')]",
@@ -389,6 +507,109 @@
         "location": "[resourceGroup().location]",
         "dependsOn": [
             "[concat('Microsoft.Compute/virtualMachines/', variables('webTierVMs').insight.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Digiseer WebTier VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('webTierVMs').digiseer.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('webTierVMs').digiseer.nicLoop]",
+            "count": "[variables('webTierVMs').digiseer.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('webTierVMs').digiseer.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('webTierVMs').digiseer.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('webTierVMs').digiseer.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('webTierVMs').digiseer.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('webTierVMs').digiseer.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('webTierVMs').digiseer.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 2,
+              "input": {
+                  "diskSizeGB": "128",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('webTierVMs').digiseer.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('webTierVMs').digiseer.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Digiseer WebTier VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('webTierVMs').digiseer.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('webTierVMs').digiseer.extLoop]",
+            "count": "[variables('webTierVMs').digiseer.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('webTierVMs').digiseer.vmName, copyindex())]"
         ],
       "properties": {
         "publisher": "Microsoft.OSTCExtensions",

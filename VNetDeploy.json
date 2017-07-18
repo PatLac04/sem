@@ -480,11 +480,11 @@
             "comments": "Enable SSH from [variables('subnets').Mgmt.name]"
           },
           {
-            "name": "Allow-Http-8080",
+            "name": "Allow-JDBC-5423",
             "properties": {
               "protocol": "Tcp",
               "sourcePortRange": "*",
-              "destinationPortRange": "80",
+              "destinationPortRange": "5432",
               "sourceAddressPrefix": "[parameters('vnetAddressPrefix')]",
               "destinationAddressPrefix": "*",
               "access": "Allow",
@@ -492,20 +492,6 @@
               "direction": "Inbound"
             },
             "comments": "Allow HTTP 8080 from other subnets"
-          },
-          {
-            "name": "Deny-SSH-Internet",
-            "properties": {
-              "description": "Deny SSH",
-              "protocol": "Tcp",
-              "sourcePortRange": "*",
-              "destinationPortRange": "22",
-              "sourceAddressPrefix": "Internet",
-              "destinationAddressPrefix": "*",
-              "access": "Deny",
-              "priority": 500,
-              "direction": "Inbound"
-            }
           },
           {
             "name": "Allow-Internal-Subnet-Traffic",
@@ -520,6 +506,20 @@
               "direction": "Inbound"
             },
             "comments": "Enable subnet internal trafic"
+          },
+          {
+            "name": "Deny-SSH-Internet",
+            "properties": {
+              "description": "Deny SSH",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 3500,
+              "direction": "Inbound"
+            }
           },
           {
             "name": "Deny-AllVNetIncoming",

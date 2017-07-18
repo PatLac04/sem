@@ -24,3 +24,11 @@ az group deployment create --name DeployMgmtVMs --resource-group $resourceGroupN
 az group deployment validate --resource-group $resourceGroupName --template-file WebDeploy.json --parameters @WebDeploy.parameters.json --verbose
 az group deployment create --name DeployWebVMs --resource-group $resourceGroupName --template-file WebDeploy.json --parameters @WebDeploy.parameters.json --verbose
 
+# Validate & Deploy API/Query VMs
+az group deployment validate --resource-group $resourceGroupName --template-file ApiandQueryDeploy.json --parameters @ApiandQueryDeploy.parameters.json --verbose
+az group deployment create --name DeployAPIAndQueryVMs --resource-group $resourceGroupName --template-file ApiandQueryDeploy.json --parameters @ApiandQueryDeploy.parameters.json --verbose
+
+# Validate & Deploy Ingestion API VMs
+az group deployment validate --resource-group $resourceGroupName --template-file IngestionApiDeploy.json --parameters @IngestionApiDeploy.parameters.json --verbose
+az group deployment create --name DeployIngestionApiVMs --resource-group $resourceGroupName --template-file IngestionApiDeploy.json --parameters @IngestionApiDeploy.parameters.json --verbose
+

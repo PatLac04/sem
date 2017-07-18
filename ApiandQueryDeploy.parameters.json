@@ -1,0 +1,27 @@
+{
+  "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "value": "PL-VNet"
+    },
+    "vnetAddressPrefix": {
+      "value": "172.16.0.0/20"
+    },
+    "webSubnetName": {
+      "value": "APIandQuery"
+    },
+    "numberOfNodesApi": {
+      "value": 2
+    },
+    "numberOfNodesLargeQuery": {
+      "value": 2
+    },
+    "adminUserName": {
+      "value": "patricel"
+    },
+    "sshKeyData": {
+      "value": "ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAuUvlN+FtST8rmw5MEDbhjE0zNXXvkQmw5CThLKBeqzEr9SXToqUdotT07pzE0Sg4RY7Qw4LvqjWA0xOoVJ5QCUsWvxDlViRNOSglk8ZiojBZjv+GtkSE39vReJAdysdSfVeEZtLdih19hL7aQy8M6e8Eby8xNv/+eIzYgIzeAgDcxCID8/F323bitbk4kzNCwbDbonVjFVRhUSPfrEFSNWlbtbHd4uHL6/wfWgb/kkrW2fYkiXpDy+dsgTFCYbP4V3+cOLQLEM24A5bWk7aXYz6rKWEiCCbauT7My4VvtlHs9zxYqOTuGi4e+57eUXmuURpXgpRVbH1hRz/99w41Vw=="
+    }
+  }
+}

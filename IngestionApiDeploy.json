@@ -1,0 +1,322 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "webSubnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Web Subnet name"
+      }
+    },
+    "numberOfNodes": {
+      "type": "int",
+      "defaultValue": 3,
+      "metadata": {
+        "description": "Number of web nodes to create for Insight"
+      }
+    },
+    "adminUserName": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin User name for the Virtual Machine."
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH rsa public key file as a string."
+      }
+    }
+  },
+  "variables": {
+    "api-version": "2015-06-15",
+    "vnetId": "[resourceId(resourceGroup().name,'Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "subnetRef": "[concat(variables('vnetId'), '/subnets/', parameters('webSubnetName'))]",
+    "diagnosticsStorageAccountName": "[concat('ingestapi', uniqueString(subscription().subscriptionId, resourceGroup().id))]",
+
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1], '.4.')]",
+
+    "vmPrefix": "vm-",
+    "pipPrefix": "pip-",
+    "nicPrefix": "nic-",
+    "osDiskPrefix": "osdisk-",
+    "dataDiskPrefix": "datadisk-",
+    "availSetPrefix": "availset-",
+    "loadBalancerPrefix": "loadbalancer-",
+    "nicLoopPrefix": "nicLoop-",
+    "natLoopPrefix": "natLoop-",
+    "extLoopPrefix": "extLoop-",
+
+    "ingestionApiVMs": {
+        "ingest": {
+            "vmName": "[concat(variables('vmPrefix'), 'ingest-api')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'ingest-api')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'ingest-api')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'ingest-api')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'ingest-api')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'ingest-api')]",
+            "numberOfNodes": 3,
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'ingest-api')]",
+            "loadBalancerPrivateIP": "172.16.4.250",
+            "lbNatLoop": "[concat(variables('natLoopPrefix'), 'ingest-api')]",
+            "dnsNameforLBIP": "patlac1",
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'ingest-api')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'ingest-api')]"
+        }
+    },
+    "ingestApiLoadBalancerID": "[resourceId('Microsoft.Network/loadBalancers', variables('ingestionApiVMs').ingest.loadBalancerName)]",
+
+    "osFamily": {
+        "imagePublisher": "OpenLogic",
+        "offer": "CentOS",
+        "imageSKU": "7.3",
+        "version": "latest"
+    }
+  },
+  "resources": [
+    {
+        "name": "[variables('diagnosticsStorageAccountName')]",
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2016-01-01",
+        "location": "[resourceGroup().location]",
+        "sku": {
+            "name": "Standard_LRS",
+            "tier": "Standard"
+        },
+        "kind": "Storage",
+        "tags": {},
+        "properties": {},
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+        "comments": "Availability Set for Ingestion Api VMs",
+        "name": "[variables('ingestionApiVMs').ingest.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Load Balancer for api VMs",
+        "type": "Microsoft.Network/loadBalancers",
+        "name": "[variables('ingestionApiVMs').ingest.loadBalancerName]",
+        "apiVersion": "2017-03-01",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "properties": {
+            "frontendIPConfigurations": [
+                {
+                    "name": "LoadBalancerFrontEnd",
+                    "properties": {
+                        "privateIPAllocationMethod": "Static",
+                        "privateIPAddress": "[variables('ingestionApiVMs').ingest.loadBalancerPrivateIP]",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "backendAddressPools": [
+                {
+                    "name": "loadBalancerBackEnd"
+                }
+            ],
+            "loadBalancingRules": [
+                {
+                    "name": "LBHttpRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('ingestionApiVMs').ingest.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 8082,
+                        "backendPort": 8082,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('ingestionApiVMs').ingest.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('ingestionApiVMs').ingest.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                }
+            ],
+            "probes": [
+                {
+                    "name": "lbprobe",
+                    "properties": {
+                        "protocol": "Tcp",
+                        "port": 8082,
+                        "intervalInSeconds": 5,
+                        "numberOfProbes": 2
+                    }
+                }
+            ],
+            "inboundNatRules": [],
+            "outboundNatRules": [],
+            "inboundNatPools": []
+        }
+    },
+    {
+        "comments": "Network Interfaces for Ingestion Api VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('ingestionApiVMs').ingest.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionApiVMs').ingest.nicLoop]",
+            "count": "[variables('ingestionApiVMs').ingest.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Network/loadBalancers/', variables('ingestionApiVMs').ingest.loadBalancerName)]"
+        ],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                        {
+                            "id": "[concat(variables('ingestApiLoadBalancerID'), '/backendAddressPools/loadBalancerBackEnd')]"
+                        }
+                        ]
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('ingestionApiVMs').ingest.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Ingestion API VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('ingestionApiVMs').ingest.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionApiVMs').ingest.nicLoop]",
+            "count": "[variables('ingestionApiVMs').ingest.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('ingestionApiVMs').ingest.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('ingestionApiVMs').ingest.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('ingestionApiVMs').ingest.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('ingestionApiVMs').ingest.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('ingestionApiVMs').ingest.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('ingestionApiVMs').ingest.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 1,
+              "input": {
+                  "diskSizeGB": "1024",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('ingestionApiVMs').ingest.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('ingestionApiVMs').ingest.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Ingestion API VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('ingestionApiVMs').ingest.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('ingestionApiVMs').ingest.extLoop]",
+            "count": "[variables('ingestionApiVMs').ingest.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('ingestionApiVMs').ingest.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    }
+  ]
+}
