@@ -1,0 +1,860 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "subnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet name"
+      }
+    },
+    "adminUserName": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin User name for the Virtual Machine."
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH rsa public key file as a string."
+      }
+    }
+  },
+  "variables": {
+    "api-version": "2015-06-15",
+    "vnetId": "[resourceId(resourceGroup().name,'Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "subnetRef": "[concat(variables('vnetId'), '/subnets/', parameters('subnetName'))]",
+    "diagnosticsStorageAccountName": "[concat('postgres', uniqueString(subscription().subscriptionId, resourceGroup().id))]",
+
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1], '.6.')]",
+
+    "vmPrefix": "vm-",
+    "pipPrefix": "pip-",
+    "nicPrefix": "nic-",
+    "osDiskPrefix": "osdisk-",
+    "dataDiskPrefix": "datadisk-",
+    "availSetPrefix": "availset-",
+    "loadBalancerPrefix": "loadbalancer-",
+    "nicLoopPrefix": "nicLoop-",
+    "dataLoopPrefix": "natLoop-",
+    "extLoopPrefix": "extLoop-",
+
+    "postgresVMs": {
+        "insightUI": {
+            "vmName": "[concat(variables('vmPrefix'), 'db-insightUI')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'db-insightUI')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'db-insightUI')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'db-insightUI')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'db-insightUI')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'db-insightUI')]",
+            "numberOfNodes": 2,
+            "numberOfDataDisks": 2,
+            "dataDiskLoop": "[concat(variables('dataLoopPrefix'), 'db-insightUI')]",
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'db-insightUI')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'db-insightUI')]"
+        },
+        "digiseerUI": {
+            "vmName": "[concat(variables('vmPrefix'), 'db-digiseerUI')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'db-digiseerUI')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'db-digiseerUI')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'db-digiseerUI')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'db-digiseerUI')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'db-digiseerUI')]",
+            "numberOfNodes": 2,
+            "numberOfDataDisks": 2,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'db-digiseerUI')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'db-digiseerUI')]"
+        },
+        "query": {
+            "vmName": "[concat(variables('vmPrefix'), 'db-query')]",
+            "vmSize": "Standard_DS2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'db-query')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'db-query')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'db-query')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'db-query')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'db-query')]",
+            "numberOfNodes": 2,
+            "numberOfDataDisks": 2,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'db-query')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'db-query')]"
+        },
+        "prod": {
+            "vmName": "[concat(variables('vmPrefix'), 'db-prod')]",
+            "vmSize": "Standard_DS2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'db-prod')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'db-prod')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'db-prod')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'db-prod')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'db-prod')]",
+            "numberOfNodes": 2,
+            "numberOfDataDisks": 2,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'db-prod')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'db-prod')]"
+        },
+        "pony": {
+            "vmName": "[concat(variables('vmPrefix'), 'pony')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'pony')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'pony')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'pony')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'pony')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'pony')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'pony')]",
+            "numberOfNodes": 1,
+            "numberOfDataDisks": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'pony')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'pony')]"
+        }
+    },
+
+    "osFamily": {
+        "imagePublisher": "OpenLogic",
+        "offer": "CentOS",
+        "imageSKU": "7.3",
+        "version": "latest"
+    }
+  },
+  "resources": [
+    {
+        "name": "[variables('diagnosticsStorageAccountName')]",
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2016-01-01",
+        "location": "[resourceGroup().location]",
+        "sku": {
+            "name": "Standard_LRS",
+            "tier": "Standard"
+        },
+        "kind": "Storage",
+        "tags": {},
+        "properties": {},
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+        "comments": "Availability Set for Postgres InsightUI VMs",
+        "name": "[variables('postgresVMs').insightUI.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Availability Set for Postgres DigiseerUI VMs",
+        "name": "[variables('postgresVMs').digiseerUI.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Availability Set for Postgres Query DB VMs",
+        "name": "[variables('postgresVMs').query.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Availability Set for Postgres Prod DB VMs",
+        "name": "[variables('postgresVMs').prod.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Network Interfaces for Postgres InsightUI VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('postgresVMs').insightUI.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').insightUI.nicLoop]",
+            "count": "[variables('postgresVMs').insightUI.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('postgresVMs').insightUI.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Postgres DigiseerUI VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('postgresVMs').digiseerUI.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').digiseerUI.nicLoop]",
+            "count": "[variables('postgresVMs').digiseerUI.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('postgresVMs').digiseerUI.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Postgres Query DB VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('postgresVMs').query.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').query.nicLoop]",
+            "count": "[variables('postgresVMs').query.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('postgresVMs').query.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Postgres Prod DB VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('postgresVMs').prod.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').prod.nicLoop]",
+            "count": "[variables('postgresVMs').prod.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('postgresVMs').prod.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Pony VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('postgresVMs').pony.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').pony.nicLoop]",
+            "count": "[variables('postgresVMs').pony.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('postgresVMs').pony.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+
+    {
+        "comments": "Postgres InsightUI VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('postgresVMs').insightUI.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').insightUI.nicLoop]",
+            "count": "[variables('postgresVMs').insightUI.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('postgresVMs').insightUI.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').insightUI.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('postgresVMs').insightUI.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').insightUI.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('postgresVMs').insightUI.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+        "osDisk": {
+            "name": "[concat(variables('postgresVMs').insightUI.osDiskName, copyindex())]",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "managedDisk": {
+                "storageAccountType": "Standard_LRS"
+            },
+            "diskSizeGB": 31
+        },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('postgresVMs').insightUI.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('postgresVMs').insightUI.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('postgresVMs').insightUI.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Postgres InsightUI VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('postgresVMs').insightUI.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('postgresVMs').insightUI.extLoop]",
+            "count": "[variables('postgresVMs').insightUI.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('postgresVMs').insightUI.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Postgres DigiseerUI VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('postgresVMs').digiseerUI.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').digiseerUI.nicLoop]",
+            "count": "[variables('postgresVMs').digiseerUI.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('postgresVMs').digiseerUI.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').digiseerUI.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('postgresVMs').digiseerUI.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').digiseerUI.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('postgresVMs').digiseerUI.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+        "osDisk": {
+            "name": "[concat(variables('postgresVMs').digiseerUI.osDiskName, copyindex())]",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "managedDisk": {
+                "storageAccountType": "Standard_LRS"
+            },
+            "diskSizeGB": 31
+        },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('postgresVMs').digiseerUI.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('postgresVMs').digiseerUI.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('postgresVMs').digiseerUI.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Postgres DigiseerUI VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('postgresVMs').digiseerUI.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('postgresVMs').digiseerUI.extLoop]",
+            "count": "[variables('postgresVMs').digiseerUI.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('postgresVMs').digiseerUI.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Postgres Query DB VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('postgresVMs').query.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').query.nicLoop]",
+            "count": "[variables('postgresVMs').query.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('postgresVMs').query.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').query.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('postgresVMs').query.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').query.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('postgresVMs').query.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+        "osDisk": {
+            "name": "[concat(variables('postgresVMs').query.osDiskName, copyindex())]",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "managedDisk": {
+                "storageAccountType": "Standard_LRS"
+            },
+            "diskSizeGB": 31
+        },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('postgresVMs').query.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('postgresVMs').query.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Premium_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('postgresVMs').query.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Postgres Query DB VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('postgresVMs').query.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('postgresVMs').query.extLoop]",
+            "count": "[variables('postgresVMs').query.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('postgresVMs').query.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Postgres Prod DB VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('postgresVMs').prod.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').prod.nicLoop]",
+            "count": "[variables('postgresVMs').prod.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('postgresVMs').prod.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').prod.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('postgresVMs').prod.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('postgresVMs').prod.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('postgresVMs').prod.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+        "osDisk": {
+            "name": "[concat(variables('postgresVMs').prod.osDiskName, copyindex())]",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "managedDisk": {
+                "storageAccountType": "Standard_LRS"
+            },
+            "diskSizeGB": 31
+        },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('postgresVMs').prod.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('postgresVMs').prod.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Premium_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('postgresVMs').prod.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Postgres Prod DB VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('postgresVMs').prod.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('postgresVMs').prod.extLoop]",
+            "count": "[variables('postgresVMs').prod.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('postgresVMs').prod.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Pony VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('postgresVMs').pony.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('postgresVMs').pony.nicLoop]",
+            "count": "[variables('postgresVMs').pony.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('postgresVMs').pony.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('postgresVMs').pony.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('postgresVMs').pony.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('postgresVMs').pony.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('postgresVMs').pony.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Pony VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('postgresVMs').pony.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('postgresVMs').pony.extLoop]",
+            "count": "[variables('postgresVMs').pony.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('postgresVMs').pony.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    }
+  ]
+}

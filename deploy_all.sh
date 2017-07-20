@@ -6,8 +6,8 @@ az login
 # multiple subscription with your user
 az account set --subscription 9c7a8343-5f8f-463a-b994-d81fc00090e5
 
-resourceGroupName=rg-PL
-location=canadaeast
+resourceGroupName=rg-Semeon
+location=canadacentral
 
 # Create a resource group
 az group create --name $resourceGroupName --location $location
@@ -32,3 +32,18 @@ az group deployment create --name DeployAPIAndQueryVMs --resource-group $resourc
 az group deployment validate --resource-group $resourceGroupName --template-file IngestionApiDeploy.json --parameters @IngestionApiDeploy.parameters.json --verbose
 az group deployment create --name DeployIngestionApiVMs --resource-group $resourceGroupName --template-file IngestionApiDeploy.json --parameters @IngestionApiDeploy.parameters.json --verbose
 
+# Validate & Deploy Ingesters and Data Capture  VMs
+az group deployment validate --resource-group $resourceGroupName --template-file IngestionDeploy.json --parameters @IngestionDeploy.parameters.json --verbose
+az group deployment create --name DeployIngestersVMs --resource-group $resourceGroupName --template-file IngestionDeploy.json --parameters @IngestionDeploy.parameters.json --verbose
+
+# Validate & Deploy SolR VMs
+az group deployment validate --resource-group $resourceGroupName --template-file SolRDeploy.json --parameters @SolRDeploy.parameters.json --verbose
+az group deployment create --name DeploySolRVMs --resource-group $resourceGroupName --template-file SolRDeploy.json --parameters @SolRDeploy.parameters.json --verbose
+
+# Validate & Deploy PostgresSQL VMs
+az group deployment validate --resource-group $resourceGroupName --template-file PostgresDeploy.json --parameters @PostgresDeploy.parameters.json --verbose
+az group deployment create --name DeployPostgresVMs --resource-group $resourceGroupName --template-file PostgresDeploy.json --parameters @PostgresDeploy.parameters.json --verbose
+
+
+
+###az group deployment create --name TestDeploy --resource-group $resourceGroupName --template-file tmp.json --parameters @IngestionDeploy.parameters.json --verbose

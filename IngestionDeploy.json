@@ -1,0 +1,952 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "subnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet name"
+      }
+    },
+    "adminUserName": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin User name for the Virtual Machine."
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH rsa public key file as a string."
+      }
+    }
+  },
+  "variables": {
+    "api-version": "2015-06-15",
+    "vnetId": "[resourceId(resourceGroup().name,'Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "subnetRef": "[concat(variables('vnetId'), '/subnets/', parameters('subnetName'))]",
+    "diagnosticsStorageAccountName": "[concat('ingest', uniqueString(subscription().subscriptionId, resourceGroup().id))]",
+
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1], '.5.')]",
+
+    "vmPrefix": "vm-",
+    "pipPrefix": "pip-",
+    "nicPrefix": "nic-",
+    "osDiskPrefix": "osdisk-",
+    "dataDiskPrefix": "datadisk-",
+    "availSetPrefix": "availset-",
+    "loadBalancerPrefix": "loadbalancer-",
+    "nicLoopPrefix": "nicLoop-",
+    "dataLoopPrefix": "natLoop-",
+    "extLoopPrefix": "extLoop-",
+
+    "ingestionVMs": {
+        "ingester": {
+            "vmName": "[concat(variables('vmPrefix'), 'ingester')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'ingester')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'ingester')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'ingester')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'ingester')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'ingester')]",
+            "numberOfNodes": 3,
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'ingester')]",
+            "loadBalancerPrivateIP": "172.16.2.250",
+            "dataDiskLoop": "[concat(variables('dataLoopPrefix'), 'ingester')]",
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'ingester')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'ingester')]"
+        },
+        "liveQuery": {
+            "vmName": "[concat(variables('vmPrefix'), 'liveQuery')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'liveQuery')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'liveQuery')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'liveQuery')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'liveQuery')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'liveQuery')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'liveQuery')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'liveQuery')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'liveQuery')]"
+        },
+        "boardReader": {
+            "vmName": "[concat(variables('vmPrefix'), 'boardReader')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'boardReader')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'boardReader')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'boardReader')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'boardReader')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'boardReader')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'boardReader')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'boardReader')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'boardReader')]"
+        },
+        "twitter": {
+            "vmName": "[concat(variables('vmPrefix'), 'twitter')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'twitter')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'twitter')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'twitter')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'twitter')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'twitter')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'twitter')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'twitter')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'twitter')]"
+        },
+        "facebook": {
+            "vmName": "[concat(variables('vmPrefix'), 'facebook')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'facebook')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'facebook')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'facebook')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'facebook')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'facebook')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'facebook')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'facebook')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'facebook')]"
+        },
+        "azureMse": {
+            "vmName": "[concat(variables('vmPrefix'), 'azureMse')]",
+            "vmSize": "Standard_D2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'azureMse')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'azureMse')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'azureMse')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'azureMse')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'azureMse')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'azureMse')]",
+            "numberOfNodes": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'azureMse')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'azureMse')]"
+        }
+    },
+    "osFamily": {
+        "imagePublisher": "OpenLogic",
+        "offer": "CentOS",
+        "imageSKU": "7.3",
+        "version": "latest"
+    }
+  },
+  "resources": [
+    {
+        "name": "[variables('diagnosticsStorageAccountName')]",
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2016-01-01",
+        "location": "[resourceGroup().location]",
+        "sku": {
+            "name": "Standard_LRS",
+            "tier": "Standard"
+        },
+        "kind": "Storage",
+        "tags": {},
+        "properties": {},
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+        "comments": "Availability Set for Ingesters VMs",
+        "name": "[variables('ingestionVMs').ingester.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Network Interfaces for Ingesters VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('ingestionVMs').ingester.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').ingester.nicLoop]",
+            "count": "[variables('ingestionVMs').ingester.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('ingestionVMs').ingester.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Live Query VM",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('ingestionVMs').liveQuery.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').liveQuery.nicLoop]",
+            "count": "[variables('ingestionVMs').liveQuery.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('ingestionVMs').liveQuery.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Board Reader VM",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('ingestionVMs').boardReader.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').boardReader.nicLoop]",
+            "count": "[variables('ingestionVMs').boardReader.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('ingestionVMs').boardReader.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Twitter VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('ingestionVMs').twitter.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').twitter.nicLoop]",
+            "count": "[variables('ingestionVMs').twitter.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('ingestionVMs').twitter.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Facebook VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('ingestionVMs').facebook.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').facebook.nicLoop]",
+            "count": "[variables('ingestionVMs').facebook.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('ingestionVMs').facebook.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for Azure MSE VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('ingestionVMs').azureMse.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').azureMse.nicLoop]",
+            "count": "[variables('ingestionVMs').azureMse.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('ingestionVMs').azureMse.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Ingesters VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('ingestionVMs').ingester.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').ingester.nicLoop]",
+            "count": "[variables('ingestionVMs').ingester.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('ingestionVMs').ingester.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('ingestionVMs').ingester.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('ingestionVMs').ingester.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('ingestionVMs').ingester.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('ingestionVMs').ingester.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('ingestionVMs').ingester.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 1,
+              "input": {
+                  "diskSizeGB": "1024",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('ingestionVMs').ingester.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('ingestionVMs').ingester.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Ingesters VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('ingestionVMs').ingester.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('ingestionVMs').ingester.extLoop]",
+            "count": "[variables('ingestionVMs').ingester.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('ingestionVMs').ingester.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Live Query VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('ingestionVMs').liveQuery.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').liveQuery.nicLoop]",
+            "count": "[variables('ingestionVMs').liveQuery.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('ingestionVMs').liveQuery.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('ingestionVMs').liveQuery.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('ingestionVMs').liveQuery.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('ingestionVMs').liveQuery.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 1,
+              "input": {
+                  "diskSizeGB": "1024",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('ingestionVMs').liveQuery.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('ingestionVMs').liveQuery.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Live Query VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('ingestionVMs').liveQuery.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('ingestionVMs').liveQuery.extLoop]",
+            "count": "[variables('ingestionVMs').liveQuery.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('ingestionVMs').liveQuery.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Board Reader VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('ingestionVMs').boardReader.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').boardReader.nicLoop]",
+            "count": "[variables('ingestionVMs').boardReader.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('ingestionVMs').boardReader.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('ingestionVMs').boardReader.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('ingestionVMs').boardReader.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('ingestionVMs').boardReader.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 1,
+              "input": {
+                  "diskSizeGB": "1024",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('ingestionVMs').boardReader.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('ingestionVMs').boardReader.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Board Reader VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('ingestionVMs').boardReader.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('ingestionVMs').boardReader.extLoop]",
+            "count": "[variables('ingestionVMs').boardReader.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('ingestionVMs').boardReader.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Twitter VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('ingestionVMs').twitter.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').twitter.nicLoop]",
+            "count": "[variables('ingestionVMs').twitter.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('ingestionVMs').twitter.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('ingestionVMs').twitter.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('ingestionVMs').twitter.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('ingestionVMs').twitter.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 1,
+              "input": {
+                  "diskSizeGB": "1024",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('ingestionVMs').twitter.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('ingestionVMs').twitter.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Twitter VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('ingestionVMs').twitter.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('ingestionVMs').twitter.extLoop]",
+            "count": "[variables('ingestionVMs').twitter.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('ingestionVMs').twitter.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Facebook VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('ingestionVMs').facebook.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').facebook.nicLoop]",
+            "count": "[variables('ingestionVMs').facebook.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('ingestionVMs').facebook.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('ingestionVMs').facebook.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('ingestionVMs').facebook.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('ingestionVMs').facebook.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 1,
+              "input": {
+                  "diskSizeGB": "1024",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('ingestionVMs').facebook.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('ingestionVMs').facebook.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Facebook VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('ingestionVMs').facebook.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('ingestionVMs').facebook.extLoop]",
+            "count": "[variables('ingestionVMs').facebook.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('ingestionVMs').facebook.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Azure MSE VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('ingestionVMs').azureMse.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('ingestionVMs').azureMse.nicLoop]",
+            "count": "[variables('ingestionVMs').azureMse.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('ingestionVMs').azureMse.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('ingestionVMs').azureMse.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('ingestionVMs').azureMse.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('ingestionVMs').azureMse.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+          "copy": [
+          {
+              "name": "dataDisks",
+              "count": 1,
+              "input": {
+                  "diskSizeGB": "1024",
+                  "lun": "[copyIndex('dataDisks')]",
+                  "createOption": "Empty",
+                  "name": "[concat(variables('ingestionVMs').azureMse.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]"
+              }
+          }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('ingestionVMs').azureMse.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Azure MSE VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('ingestionVMs').azureMse.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('ingestionVMs').azureMse.extLoop]",
+            "count": "[variables('ingestionVMs').azureMse.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('ingestionVMs').azureMse.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    }
+  ]
+}

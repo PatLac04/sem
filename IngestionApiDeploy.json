@@ -20,13 +20,6 @@
         "description": "Web Subnet name"
       }
     },
-    "numberOfNodes": {
-      "type": "int",
-      "defaultValue": 3,
-      "metadata": {
-        "description": "Number of web nodes to create for Insight"
-      }
-    },
     "adminUserName": {
       "type": "string",
       "metadata": {

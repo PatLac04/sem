@@ -1,0 +1,845 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "VNet name"
+      }
+    },
+    "vnetAddressPrefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Address prefix"
+      }
+    },
+    "subnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Subnet name"
+      }
+    },
+    "adminUserName": {
+      "type": "string",
+      "metadata": {
+        "description": "Admin User name for the Virtual Machine."
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "metadata": {
+        "description": "SSH rsa public key file as a string."
+      }
+    }
+  },
+  "variables": {
+    "api-version": "2015-06-15",
+    "vnetId": "[resourceId(resourceGroup().name,'Microsoft.Network/virtualNetworks', parameters('vnetName'))]",
+    "subnetRef": "[concat(variables('vnetId'), '/subnets/', parameters('subnetName'))]",
+    "diagnosticsStorageAccountName": "[concat('solr', uniqueString(subscription().subscriptionId, resourceGroup().id))]",
+
+    "subnetParts": "[split(parameters('vnetAddressPrefix'), '.')]",
+    "subnetPrefix": "[concat(variables('subnetParts')[0], '.', variables('subnetParts')[1], '.3.')]",
+
+    "vmPrefix": "vm-",
+    "pipPrefix": "pip-",
+    "nicPrefix": "nic-",
+    "osDiskPrefix": "osdisk-",
+    "dataDiskPrefix": "datadisk-",
+    "availSetPrefix": "availset-",
+    "loadBalancerPrefix": "loadbalancer-",
+    "nicLoopPrefix": "nicLoop-",
+    "dataLoopPrefix": "natLoop-",
+    "extLoopPrefix": "extLoop-",
+
+    "solRVMs": {
+        "queryEn": {
+            "vmName": "[concat(variables('vmPrefix'), 'queryEn')]",
+            "vmSize": "Standard_DS2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'queryEn')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'queryEn')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'queryEn')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'queryEn')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'queryEn')]",
+            "numberOfNodes": 2,
+            "numberOfDataDisks": 1,
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'queryEn')]",
+            "loadBalancerPrivateIP": "172.16.3.200",
+            "dataDiskLoop": "[concat(variables('dataLoopPrefix'), 'queryEn')]",
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'queryEn')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'queryEn')]"
+        },
+        "queryFr": {
+            "vmName": "[concat(variables('vmPrefix'), 'queryFr')]",
+            "vmSize": "Standard_DS2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'queryFr')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'queryFr')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'queryFr')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'queryFr')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'queryFr')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'queryFr')]",
+            "loadBalancerPrivateIP": "172.16.3.250",
+            "numberOfNodes": 2,
+            "numberOfDataDisks": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'queryFr')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'queryFr')]"
+        },
+        "ingestFr": {
+            "vmName": "[concat(variables('vmPrefix'), 'ingestFr')]",
+            "vmSize": "Standard_DS2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'ingestFr')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'ingestFr')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'ingestFr')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'ingestFr')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'ingestFr')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'ingestFr')]",
+            "numberOfNodes": 1,
+            "numberOfDataDisks": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'ingestFr')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'ingestFr')]"
+        },
+        "ingestEn": {
+            "vmName": "[concat(variables('vmPrefix'), 'ingestEn')]",
+            "vmSize": "Standard_DS2_v2_Promo",
+            "vmPip": "[concat(variables('pipPrefix'), 'ingestEn')]",
+            "vmNic": "[concat(variables('nicPrefix'), 'ingestEn')]",
+            "osDiskName": "[concat(variables('osDiskPrefix'), 'ingestEn')]",
+            "dataDiskName": "[concat(variables('dataDiskPrefix'), 'ingestEn')]",
+            "availSetName": "[concat(variables('availSetPrefix'), 'ingestEn')]",
+            "loadBalancerName": "[concat(variables('loadBalancerPrefix'), 'ingestEn')]",
+            "numberOfNodes": 1,
+            "numberOfDataDisks": 1,
+            "nicLoop": "[concat(variables('nicLoopPrefix'), 'ingestEn')]",
+            "extLoop": "[concat(variables('extLoopPrefix'), 'ingestEn')]"
+        }
+    },
+    "queryEnLBId": "[resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryEn.loadBalancerName)]",
+    "queryFrLBId": "[resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryFr.loadBalancerName)]",
+
+    "osFamily": {
+        "imagePublisher": "OpenLogic",
+        "offer": "CentOS",
+        "imageSKU": "7.3",
+        "version": "latest"
+    }
+  },
+  "resources": [
+    {
+        "name": "[variables('diagnosticsStorageAccountName')]",
+        "type": "Microsoft.Storage/storageAccounts",
+        "apiVersion": "2016-01-01",
+        "location": "[resourceGroup().location]",
+        "sku": {
+            "name": "Standard_LRS",
+            "tier": "Standard"
+        },
+        "kind": "Storage",
+        "tags": {},
+        "properties": {},
+        "resources": [],
+        "dependsOn": []
+    },
+    {
+        "comments": "Availability Set for QueryEN VMs",
+        "name": "[variables('solRVMs').queryEn.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Availability Set for QueryFR VMs",
+        "name": "[variables('solRVMs').queryFr.availSetName]",
+        "type": "Microsoft.Compute/availabilitySets",
+        "apiVersion": "2016-04-30-preview",
+        "location": "[resourceGroup().location]",
+        "properties": {
+            "platformFaultDomainCount": 2,
+            "platformUpdateDomainCount": 5,
+            "managed": "true"
+        }
+    },
+    {
+        "comments": "Load Balancer for QueryEN VMs",
+        "type": "Microsoft.Network/loadBalancers",
+        "name": "[variables('solRVMs').queryEn.loadBalancerName]",
+        "apiVersion": "2017-03-01",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "properties": {
+            "frontendIPConfigurations": [
+                {
+                    "name": "LoadBalancerFrontEnd",
+                    "properties": {
+                        "privateIPAllocationMethod": "Static",
+                        "privateIPAddress": "[variables('solRVMs').queryEn.loadBalancerPrivateIP]",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "backendAddressPools": [
+                {
+                    "name": "loadBalancerBackEnd"
+                }
+            ],
+            "loadBalancingRules": [
+                {
+                    "name": "LBHttpRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryEn.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 8080,
+                        "backendPort": 8080,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryEn.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryEn.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                }
+            ],
+            "probes": [
+                {
+                    "name": "lbprobe",
+                    "properties": {
+                        "protocol": "Tcp",
+                        "port": 80,
+                        "intervalInSeconds": 5,
+                        "numberOfProbes": 2
+                    }
+                }
+            ],
+            "inboundNatRules": [],
+            "outboundNatRules": [],
+            "inboundNatPools": []
+        }
+    },
+    {
+        "comments": "Network Interfaces for QueryEN VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('solRVMs').queryEn.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').queryEn.nicLoop]",
+            "count": "[variables('solRVMs').queryEn.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Network/loadBalancers/', variables('solRVMs').queryEn.loadBalancerName)]"
+        ],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                        {
+                            "id": "[concat(variables('queryEnLBId'), '/backendAddressPools/loadBalancerBackEnd')]"
+                        }
+                        ]
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('solRVMs').queryEn.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Load Balancer for QueryFR VMs",
+        "type": "Microsoft.Network/loadBalancers",
+        "name": "[variables('solRVMs').queryFr.loadBalancerName]",
+        "apiVersion": "2017-03-01",
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "properties": {
+            "frontendIPConfigurations": [
+                {
+                    "name": "LoadBalancerFrontEnd",
+                    "properties": {
+                        "privateIPAllocationMethod": "Static",
+                        "privateIPAddress": "[variables('solRVMs').queryFr.loadBalancerPrivateIP]",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "backendAddressPools": [
+                {
+                    "name": "loadBalancerBackEnd"
+                }
+            ],
+            "loadBalancingRules": [
+                {
+                    "name": "LBHttpRule",
+                    "properties": {
+                        "frontendIPConfiguration": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryFr.loadBalancerName), '/frontendIpConfigurations/loadBalancerFrontEnd')]"
+                        },
+                        "frontendPort": 8080,
+                        "backendPort": 8080,
+                        "enableFloatingIP": false,
+                        "idleTimeoutInMinutes": 5,
+                        "protocol": "Tcp",
+                        "loadDistribution": "Default",
+                        "backendAddressPool": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryFr.loadBalancerName), '/backendAddressPools/loadBalancerBackEnd')]"
+                        },
+                        "probe": {
+                            "id": "[concat(resourceId('Microsoft.Network/loadBalancers', variables('solRVMs').queryFr.loadBalancerName), '/probes/lbprobe')]"
+                        }
+                    }
+                }
+            ],
+            "probes": [
+                {
+                    "name": "lbprobe",
+                    "properties": {
+                        "protocol": "Tcp",
+                        "port": 80,
+                        "intervalInSeconds": 5,
+                        "numberOfProbes": 2
+                    }
+                }
+            ],
+            "inboundNatRules": [],
+            "outboundNatRules": [],
+            "inboundNatPools": []
+        }
+    },
+    {
+        "comments": "Network Interfaces for QueryFR VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('solRVMs').queryFr.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').queryFr.nicLoop]",
+            "count": "[variables('solRVMs').queryFr.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Network/loadBalancers/', variables('solRVMs').queryFr.loadBalancerName)]"
+        ],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        },
+                        "loadBalancerBackendAddressPools": [
+                        {
+                            "id": "[concat(variables('queryFrLBId'), '/backendAddressPools/loadBalancerBackEnd')]"
+                        }
+                        ]
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('solRVMs').queryFr.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for IngestFR VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('solRVMs').ingestFr.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').ingestFr.nicLoop]",
+            "count": "[variables('solRVMs').ingestFr.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('solRVMs').ingestFr.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+    {
+        "comments": "Network Interfaces for IngestEN VMs",
+        "type": "Microsoft.Network/networkInterfaces",
+        "name": "[concat(variables('solRVMs').ingestEn.vmNic, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').ingestEn.nicLoop]",
+            "count": "[variables('solRVMs').ingestEn.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [],
+        "apiVersion": "2016-09-01",
+        "properties": {
+            "ipConfigurations": [
+                {
+                    "name": "ipconfig1",
+                    "properties": {
+                        "privateIPAllocationMethod": "Dynamic",
+                        "subnet": {
+                            "id": "[variables('subnetRef')]"
+                        }
+                    }
+                }
+            ],
+            "dnsSettings": {
+                "dnsServers": [],
+                "internalDnsNameLabel": "[concat(variables('solRVMs').ingestEn.vmName, copyindex())]"
+            },
+            "enableIPForwarding": false
+        }
+    },
+
+    {
+        "comments": "Query EN VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('solRVMs').queryEn.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').queryEn.nicLoop]",
+            "count": "[variables('solRVMs').queryEn.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('solRVMs').queryEn.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('solRVMs').queryEn.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('solRVMs').queryEn.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('solRVMs').queryEn.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('solRVMs').queryEn.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+        "osDisk": {
+            "name": "[concat(variables('solRVMs').queryEn.osDiskName, copyindex())]",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "managedDisk": {
+                "storageAccountType": "Standard_LRS"
+            },
+            "diskSizeGB": 31
+        },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('solRVMs').queryEn.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('solRVMs').queryEn.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Premium_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('solRVMs').queryEn.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "Query EN VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('solRVMs').queryEn.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('solRVMs').queryEn.extLoop]",
+            "count": "[variables('solRVMs').queryEn.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('solRVMs').queryEn.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "Query FR VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('solRVMs').queryFr.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').queryFr.nicLoop]",
+            "count": "[variables('solRVMs').queryFr.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('solRVMs').queryFr.vmNic, copyindex())]",
+            "[resourceId('Microsoft.Compute/availabilitySets', variables('solRVMs').queryFr.availSetName)]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('solRVMs').queryFr.vmSize]"
+        },
+        "availabilitySet": {
+            "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('solRVMs').queryFr.availSetName)]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('solRVMs').queryFr.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+        "osDisk": {
+            "name": "[concat(variables('solRVMs').queryFr.osDiskName, copyindex())]",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "managedDisk": {
+                "storageAccountType": "Standard_LRS"
+            },
+            "diskSizeGB": 31
+        },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('solRVMs').queryFr.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('solRVMs').queryFr.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Premium_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('solRVMs').queryFr.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "QueryFR VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('solRVMs').queryFr.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('solRVMs').queryFr.extLoop]",
+            "count": "[variables('solRVMs').queryFr.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('solRVMs').queryFr.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "SolR Ingesters FR VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('solRVMs').ingestFr.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').ingestFr.nicLoop]",
+            "count": "[variables('solRVMs').ingestFr.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('solRVMs').ingestFr.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('solRVMs').ingestFr.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('solRVMs').ingestFr.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('solRVMs').ingestFr.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('solRVMs').ingestFr.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('solRVMs').ingestFr.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Premium_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('solRVMs').ingestFr.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "SolR Ingesters FR VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('solRVMs').ingestFr.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('solRVMs').ingestFr.extLoop]",
+            "count": "[variables('solRVMs').ingestFr.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('solRVMs').ingestFr.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    },
+    {
+        "comments": "SolR Ingesters EN VMs",
+        "type": "Microsoft.Compute/virtualMachines",
+        "name": "[concat(variables('solRVMs').ingestEn.vmName, copyindex())]",
+        "copy": {
+            "name": "[variables('solRVMs').ingestEn.nicLoop]",
+            "count": "[variables('solRVMs').ingestEn.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Storage/storageAccounts/', variables('diagnosticsStorageAccountName'))]",
+            "[concat('Microsoft.Network/networkInterfaces/',variables('solRVMs').ingestEn.vmNic, copyindex())]"
+        ],
+        "apiVersion": "2016-04-30-preview",
+        "properties": {
+            "hardwareProfile": {
+            "vmSize": "[variables('solRVMs').ingestEn.vmSize]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('solRVMs').ingestEn.vmName, copyindex())]",
+            "adminUsername": "[parameters('adminUsername')]",
+            "linuxConfiguration": {
+                "disablePasswordAuthentication": true,
+                "ssh": {
+                    "publicKeys": [
+                    {
+                        "path": "[concat('/home/', parameters('adminUsername'), '/.ssh/authorized_keys')]",
+                        "keyData": "[parameters('sshKeyData')]"
+                    }
+                    ]
+                }
+            }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('osFamily').imagePublisher]",
+            "offer": "[variables('osFamily').offer]",
+            "sku": "[variables('osFamily').imageSKU]",
+            "version": "[variables('osFamily').version]"
+          },
+          "osDisk": {
+                "name": "[concat(variables('solRVMs').ingestEn.osDiskName, copyindex())]",
+                "caching": "ReadWrite",
+                "createOption": "FromImage",
+                "managedDisk": {
+                    "storageAccountType": "Standard_LRS"
+                },
+                "diskSizeGB": 31
+          },
+        "copy": [
+        {
+            "name": "dataDisks",
+            "count": "[variables('solRVMs').ingestEn.numberOfDataDisks]",
+            "input": {
+                "diskSizeGB": "1024",
+                "lun": "[copyIndex('dataDisks')]",
+                "createOption": "Empty",
+                "name": "[concat(variables('solRVMs').ingestEn.dataDiskName, copyindex(), '-', add(1, copyIndex('dataDisks')))]",
+                "managedDisk": {
+                    "storageAccountType": "Premium_LRS"
+                }
+            }
+        }
+        ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(variables('solRVMs').ingestEn.vmNic, copyindex()))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+            "bootDiagnostics": {
+                "enabled": true,
+                "storageUri": "[reference(resourceId(resourceGroup().name, 'Microsoft.Storage/storageAccounts', variables('diagnosticsStorageAccountName')), '2015-06-15').primaryEndpoints['blob']]"
+            }
+        }
+      }
+    },
+    {
+        "comments": "SolR Ingesters EN VM extensions",
+        "type": "Microsoft.Compute/virtualMachines/extensions",
+        "apiVersion": "[variables('api-version')]",
+        "name": "[concat(variables('solRVMs').ingestEn.vmName, copyindex(), '/enablevmaccess')]",
+        "copy": {
+            "name": "[variables('solRVMs').ingestEn.extLoop]",
+            "count": "[variables('solRVMs').ingestEn.numberOfNodes]"
+        },
+        "location": "[resourceGroup().location]",
+        "dependsOn": [
+            "[concat('Microsoft.Compute/virtualMachines/', variables('solRVMs').ingestEn.vmName, copyindex())]"
+        ],
+      "properties": {
+        "publisher": "Microsoft.OSTCExtensions",
+        "type": "VMAccessForLinux",
+        "typeHandlerVersion": "1.4",
+        "autoUpgradeMinorVersion": "true",
+        "settings": { },
+        "protectedSettings": { }
+      }
+    }
+  ]
+}

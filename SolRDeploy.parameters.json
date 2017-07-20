@@ -8,8 +8,8 @@
     "vnetAddressPrefix": {
       "value": "172.16.0.0/20"
     },
-    "webSubnetName": {
-      "value": "IngestionAPI"
+    "subnetName": {
+      "value": "SolR"
     },
     "adminUserName": {
       "value": "patricel"
